@@ -38,8 +38,11 @@
 #define IIIF_CONTEXT IIIF_PROTOCOL "/%d/context.json"
 
 // IIIF compliance level
+#ifdef HAVE_PNG
+#define IIIF_PROFILE "level2"
+#else
 #define IIIF_PROFILE "level1"
-
+#endif
 
 
 using namespace std;
@@ -110,7 +113,7 @@ void IIIF::run( Session* session, const string& src )
                     + "Server: iipsrv/" + VERSION + "\r\n"
                     + "X-Powered-By: IIPImage\r\n"
                     + "\r\n";
-    session->out->printf( (const char*) header.c_str() );
+    session->out->putStr( (const char*) header.c_str(), header.size() );
     session->response->setImageSent();
     if ( session->loglevel >= 2 ){
       *(session->logfile) << "IIIF :: Sending HTTP 303 See Other : " << id + "/info.json" << endl;
@@ -254,7 +257,7 @@ void IIIF::run( Session* session, const string& src )
       infoStringStream << "  \"@id\" : \"" << iiif_id << "\"," << endl
 		       << "  \"profile\" : [" << endl
 		       << "     \"" << IIIF_PROTOCOL << "/" << iiif_version << "/" << IIIF_PROFILE << "\"," << endl
-		       << "     { \"formats\" : [ \"jpg\" ]," << endl
+		       << "     { \"formats\" : [ \"jpg\", \"png\" ]," << endl
 		       << "       \"qualities\" : [\"native\",\"color\",\"gray\",\"bitonal\"]," << endl
 		       << "       \"supports\" : [\"regionByPct\",\"regionSquare\",\"sizeByForcedWh\",\"sizeByWh\",\"sizeAboveFull\",\"sizeUpscaling\",\"rotationBy90s\",\"mirroring\"]," << endl
 		       << "       \"maxWidth\" : " << max << "," << endl
@@ -269,7 +272,7 @@ void IIIF::run( Session* session, const string& src )
     header << session->response->createHTTPHeader( "ld+json", (*session->image)->getTimestamp() )
 	   << infoStringStream.str();
 
-    session->out->printf( (const char*) header.str().c_str() );
+    session->out->putStr( (const char*) header.str().c_str(), header.tellp() );
     session->response->setImageSent();
 
     // Because of our ability to serve different versions and because of possible content-negotiation
@@ -461,13 +464,13 @@ void IIIF::run( Session* session, const string& src )
       // Check for malformed upscaling request
       if( iiif_version >= 3 ){
 	if( session->view->allow_upscaling == false &&
-	    ( requested_width > width || requested_height > height ) ){
+	    ( requested_width > (int) width || requested_height > (int) height ) ){
 	  throw invalid_argument( "IIIF: upscaling should be prefixed with ^" );
 	}
       }
 
       // Limit our requested size to the maximum allowable size if necessary
-      if( requested_width > max_size || requested_height > max_size ){
+      if( requested_width > (int) max_size || requested_height > (int) max_size ){
 	if( ratio > 1.0 ){
 	  requested_width = max_size;
 	  requested_height = session->view->maintain_aspect ? round(max_size*ratio) : max_size;
@@ -539,14 +542,18 @@ void IIIF::run( Session* session, const string& src )
       // Check for a format specifier
       pos = quality.find_last_of(".");
 
-      // Format - if dot is not present, we use default and currently only supported format - JPEG
+      // Get requested output format: JPEG and PNG are currently supported
       if ( pos != string::npos ){
         format = quality.substr( pos + 1, string::npos );
         quality.erase( pos, string::npos );
-        if ( format != "jpg" ){
-          throw invalid_argument( "IIIF :: Only JPEG output supported" );
-        }
+
+	if( format == "jpg" ) session->view->output_format = JPEG;
+#ifdef HAVE_PNG
+	else if( format == "png" ) session->view->output_format = PNG;
+#endif
+	else throw invalid_argument( "IIIF :: unsupported output format" );
       }
+
 
       // Quality
       if ( quality == "native" || quality == "color" || quality == "default" ){
@@ -618,13 +625,13 @@ void IIIF::run( Session* session, const string& src )
 
   // Determine whether this is a tile request which coincides with our tile boundaries
   if ( ( session->view->maintain_aspect && (requested_res > 0) &&
-         (requested_width == tw) && (requested_height == th) &&
+         (requested_width == (int) tw) && (requested_height == (int) th) &&
          (view_left % tw == 0) && (view_top % th == 0) &&
          (session->view->getViewWidth() % tw == 0) && (session->view->getViewHeight() % th == 0) &&
          (session->view->getViewWidth() < im_width) && (session->view->getViewHeight() < im_height) )
        ||
        ( session->view->maintain_aspect && (requested_res == 0) &&
-         (requested_width == im_width) && (requested_height == im_height) )
+         ((unsigned int) requested_width == im_width) && ((unsigned int) requested_height == im_height) )
      ){
 
     // Get the width and height for last row and column tiles

@@ -1,7 +1,7 @@
 /*
     IIP CVT Command Handler Class Member Function
 
-    Copyright (C) 2006-2019 Ruven Pillay.
+    Copyright (C) 2006-2021 Ruven Pillay.
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -50,6 +50,9 @@ void CVT::send( Session* session ){
   // Set up our output format handler
   Compressor *compressor = NULL;
   if( session->view->output_format == JPEG ) compressor = session->jpeg;
+#ifdef HAVE_PNG
+  else if( session->view->output_format == PNG ) compressor = session->png;
+#endif
   else return;
 
 
@@ -174,7 +177,11 @@ void CVT::send( Session* session ){
 	    (*session->image)->getTimestamp().c_str(),
 	    compressor->getMimeType(), basename.c_str(), compressor->getSuffix() );
 
-  session->out->printf( (const char*) str );
+  if( session->out->putS( (const char*) str ) == -1 ){
+    if( session->loglevel >= 1 ){
+      *(session->logfile) << "CVT :: Error writing HTTP header" << endl;
+    }
+  }
 #endif
 
 
@@ -230,9 +237,8 @@ void CVT::send( Session* session ){
   }
 
 
-  // Only use our floating point pipeline if necessary
-  if( complete_image.bpc > 8 || session->view->floatProcessing() ){
-
+  // Only use our floating point image processing pipeline if necessary
+  if( complete_image.sampleType == FLOATINGPOINT || session->view->floatProcessing() ){
 
     // Make a copy of our max and min as we may change these
     vector <float> min = (*session->image)->min;
@@ -299,14 +305,19 @@ void CVT::send( Session* session ){
     }
 
 
-    // Apply any gamma correction
+    // Apply any gamma or log transform
     if( session->view->gamma != 1.0 ){
       float gamma = session->view->gamma;
       if( session->loglevel >= 5 ) function_timer.start();
-      session->processor->gamma( complete_image, gamma );
+
+      // Check whether we have asked for logarithm
+      if( gamma == -1 ) session->processor->log( complete_image );
+      else session->processor->gamma( complete_image, gamma );
+
       if( session->loglevel >= 5 ){
-	*(session->logfile) << "CVT :: Applying gamma of " << gamma << " in "
-			    << function_timer.getTime() << " microseconds" << endl;
+	if( gamma == -1 ) *(session->logfile) << "CVT :: Applying logarithm transform in ";
+	else *(session->logfile) << "CVT :: Applying gamma of " << gamma << " in ";
+	*(session->logfile) << function_timer.getTime() << " microseconds" << endl;
       }
     }
 
@@ -331,8 +342,7 @@ void CVT::send( Session* session ){
     }
 
 
-
-    // Apply any contrast adjustments and/or clip from 16bit or 32bit to 8bit
+    // Apply any contrast adjustments and scale to 8 bit quantization
     {
       if( session->loglevel >= 5 ) function_timer.start();
       session->processor->contrast( complete_image, session->view->contrast );
@@ -341,6 +351,16 @@ void CVT::send( Session* session ){
 			    << " and converting to 8bit in " << function_timer.getTime() << " microseconds" << endl;
       }
     }
+  }
+
+  // If no image processing is being done, but we have a 32 or 16 bit fixed point image, do a fast rescale to 8 bit
+  else if( complete_image.bpc > 8 ){
+    if( session->loglevel >= 5 ){
+      *(session->logfile) << "CVT :: Scaling from " << complete_image.bpc << " to 8 bits per channel in ";
+      function_timer.start();
+    }
+    session->processor->scale_to_8bit( complete_image );
+    if( session->loglevel >= 5 ) *(session->logfile) << function_timer.getTime() << " microseconds" << endl;
   }
 
 
@@ -370,8 +390,10 @@ void CVT::send( Session* session ){
   }
 
 
-  // Reduce to 1 or 3 bands if we have an alpha channel or a multi-band image
-  if( (complete_image.channels==2) || (complete_image.channels>3 ) ){
+  // Reduce to 1 or 3 bands if we have an alpha channel or a multi-band image and have requested a JPEG tile
+  // For PNG, strip extra bands if we have more than 4 present
+  if( ( (session->view->output_format == JPEG) && (complete_image.channels == 2 || complete_image.channels > 3) ) ||
+      ( (session->view->output_format == PNG) && (complete_image.channels > 4) ) ){
 
     int output_channels = (complete_image.channels==2)? 1 : 3;
     if( session->loglevel >= 5 ) function_timer.start();
@@ -468,12 +490,14 @@ void CVT::send( Session* session ){
 
 
   // Set the physical output resolution for this particular view and zoom level
-  float dpi_x = (*session->image)->dpi_x * (float) im_width / (float) (*session->image)->getImageWidth();
-  float dpi_y = (*session->image)->dpi_y * (float) im_height / (float) (*session->image)->getImageHeight();
-  compressor->setResolution( dpi_x, dpi_y, (*session->image)->dpi_units );
-  if( session->loglevel >= 5 ){
-    *(session->logfile) << "CVT :: Setting physical resolution of this view to " <<  dpi_x << " x " << dpi_y
-			<< ( ((*session->image)->dpi_units==1) ? " pixels/inch" : " pixels/cm" ) << endl;
+  if( (*session->image)->dpi_x > 0 && (*session->image)->dpi_y > 0 ){
+    float dpi_x = (*session->image)->dpi_x * (float) im_width / (float) (*session->image)->getImageWidth();
+    float dpi_y = (*session->image)->dpi_y * (float) im_height / (float) (*session->image)->getImageHeight();
+    compressor->setResolution( dpi_x, dpi_y, (*session->image)->dpi_units );
+    if( session->loglevel >= 5 ){
+      *(session->logfile) << "CVT :: Setting physical resolution of this view to " <<  dpi_x << " x " << dpi_y
+			  << ( ((*session->image)->dpi_units==1) ? " pixels/inch" : " pixels/cm" ) << endl;
+    }
   }
 
   // Set ICC profile if of a reasonable size
@@ -512,7 +536,7 @@ void CVT::send( Session* session ){
 #ifdef CHUNKED
   snprintf( str, 1024, "%X\r\n", len );
   if( session->loglevel >= 4 ) *(session->logfile) << "CVT :: Output Header Chunk : " << str;
-  session->out->printf( str );
+  session->out->putS( str );
 #endif
 
   if( session->out->putStr( (const char*) compressor->getHeader(), len ) != len ){
@@ -522,7 +546,7 @@ void CVT::send( Session* session ){
   }
 
 #ifdef CHUNKED
-  session->out->printf( "\r\n" );
+  session->out->putStr( "\r\n", 2 );
 #endif
 
   // Flush our block of data
@@ -564,7 +588,7 @@ void CVT::send( Session* session ){
     // Send chunk length in hex
     snprintf( str, 1024, "%X\r\n", len );
     if( session->loglevel >= 4 ) *(session->logfile) << "CVT :: Chunk : " << str;
-    session->out->printf( str );
+    session->out->putS( str );
 #endif
 
     // Send this strip out to the client
@@ -576,7 +600,7 @@ void CVT::send( Session* session ){
 
 #ifdef CHUNKED
     // Send closing chunk CRLF
-    session->out->printf( "\r\n" );
+    session->out->putStr( "\r\n", 2 );
 #endif
 
     // Flush our block of data
@@ -594,7 +618,7 @@ void CVT::send( Session* session ){
 #ifdef CHUNKED
   snprintf( str, 1024, "%X\r\n", len );
   if( session->loglevel >= 4 ) *(session->logfile) << "CVT :: Final Data Chunk : " << str << endl;
-  session->out->printf( str );
+  session->out->putS( str );
 #endif
 
   if( session->out->putStr( (const char*) output, len ) != len ){
@@ -608,9 +632,9 @@ void CVT::send( Session* session ){
 
 #ifdef CHUNKED
   // Send closing chunk CRLF
-  session->out->printf( "\r\n" );
+  session->out->putStr( "\r\n", 2 );
   // Send closing blank chunk
-  session->out->printf( "0\r\n\r\n" );
+  session->out->putS( "0\r\n\r\n" );
 #endif
 
   if( session->out->flush()  == -1 ) {

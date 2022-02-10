@@ -1,7 +1,7 @@
 /*
     IIP Command Handler Member Functions
 
-    Copyright (C) 2006-2019 Ruven Pillay.
+    Copyright (C) 2006-2021 Ruven Pillay.
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -49,7 +49,9 @@ Task* Task::factory( const string& t ){
   else if( type == "rgn" ) return new RGN;
   else if( type == "rot" ) return new ROT;
   else if( type == "til" ) return new TIL;
-//  else if( type == "ptl" ) return new PTL;
+#ifdef HAVE_PNG
+  else if( type == "ptl" ) return new PTL;
+#endif
   else if( type == "jtl" ) return new JTL;
   else if( type == "jtls" ) return new JTLS;
   else if( type == "icc" ) return new ICC;
@@ -88,14 +90,18 @@ void QLT::run( Session* session, const string& argument ){
     // Check the value is realistic
     if( factor < 0 || factor > 100 ){
       if( session->loglevel >= 2 ){
-	*(session->logfile) << "QLT :: JPEG Quality factor of " << argument
-			    << " out of bounds. Must be 0-100" << endl;
+	*(session->logfile) << "QLT :: Quality factor of " << argument
+			    << " out of bounds. Must be 0-100 for JPEG and 0-9 for PNG" << endl;
       }
     }
 
     session->jpeg->setQuality( factor );
-  }
+#ifdef HAVE_PNG
+    session->png->setQuality( factor );
+#endif
 
+    if( session->loglevel >= 2 ) *(session->logfile) << "QLT :: Requested quality is " << factor << endl;
+  }
 }
 
 
@@ -146,6 +152,9 @@ void MINMAX::run( Session* session, const string& argument ){
   tmp = arg3.substr( 0, delimitter );
   (*(session->image))->max[nchan] = atof( tmp.c_str() );
 
+  // Indicate that we have a user-defined min/max
+  session->view->minmax = true;
+
   if( session->loglevel >= 2 ) *(session->logfile) << "MINMAX :: set to " << (*(session->image))->min[nchan] << ", "
 						   << (*(session->image))->max[nchan] << " for channel " << nchan << endl;
 }
@@ -179,12 +188,23 @@ void CNT::run( Session* session, const string& argument ){
 
 void GAM::run( Session* session, const string& argument ){
 
-  float gamma = (float) atof( argument.c_str() );
+  string arg = argument;
+  transform( arg.begin(), arg.end(), arg.begin(), ::tolower );
 
   if( session->loglevel >= 2 ) *(session->logfile) << "GAM handler reached" << endl;
-  if( session->loglevel >= 3 ) *(session->logfile) << "GAM :: requested gamma adjustment is " << gamma << endl;
 
-  session->view->gamma = gamma;
+  // Log transform
+  if( arg == "log" || arg == "logarithm" ){
+    // Use reserved value of -1 for logarithm
+    session->view->gamma = -1;
+    if( session->loglevel >= 3 ) *(session->logfile) << "GAM :: log transform requested" << endl;
+  }
+  // Exponential transform
+  else{
+    float gamma = (float) atof( argument.c_str() );
+    session->view->gamma = gamma;
+    if( session->loglevel >= 3 ) *(session->logfile) << "GAM :: requested gamma adjustment is " << gamma << endl;
+  }
 }
 
 
@@ -194,14 +214,19 @@ void CVT::run( Session* session, const string& src ){
   string argument = src;
   transform( argument.begin(), argument.end(), argument.begin(), ::tolower );
 
-  // For the moment, only deal with JPEG. If we have specified something else, give a warning
-  // and send JPEG anyway
-  if( argument != "jpeg" ){
-    if( session->loglevel >= 1 ) *(session->logfile) << "CVT :: Unsupported request: '" << argument << "'. Sending JPEG." << endl;
-  }
-  else{
+  if( argument == "jpeg" || argument == "jpg" ){
     session->view->output_format = JPEG;
     if( session->loglevel >= 3 ) *(session->logfile) << "CVT :: JPEG output" << endl;
+  }
+#ifdef HAVE_PNG
+  else if( argument == "png" ){
+    session->view->output_format = PNG;
+    if( session->loglevel >= 3 ) *(session->logfile) << "CVT :: PNG output" << endl;
+  }
+#endif
+  else{
+    session->view->output_format = JPEG;
+    if( session->loglevel >= 1 ) *(session->logfile) << "CVT :: Unsupported request: '" << argument << "'. Sending JPEG" << endl;
   }
 
   this->send( session );

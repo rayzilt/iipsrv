@@ -7,7 +7,7 @@
     Culture of the Czech Republic.
 
 
-    Copyright (C) 2009-2020 IIPImage.
+    Copyright (C) 2009-2022 IIPImage.
     Author: Ruven Pillay
 
     This program is free software; you can redistribute it and/or modify
@@ -139,6 +139,14 @@ void KakaduImage::loadImageInfo( int seq, int ang )
   jp2_colour j2k_colour;
   kdu_coords layer_size;
   jpx_layer_source jpx_layer;
+
+  // Check for High Throughput JPEG2000 codestream
+#ifdef DEBUG
+  siz_params *siz = codestream.access_siz();
+  int pcap_value = 0;
+  siz->get( Scap, 0, 0, pcap_value );
+  if( pcap_value & 0x00020000 ) logfile << "Kakadu :: HTJ2K codestream" << endl;
+#endif
 
   // Malformed images can throw exceptions here with older versions of Kakadu
   try{
@@ -439,11 +447,12 @@ RawTile KakaduImage::getRegion( int seq, int ang, unsigned int res, int layers, 
 
   RawTile rawtile( 0, res, seq, ang, w, h, channels, obpc );
 
-  if( obpc == 16 ) rawtile.data = new unsigned short[w*h*channels];
-  else if( obpc == 8 ) rawtile.data = new unsigned char[w*h*channels];
+  size_t np = (size_t) w * (size_t) h * (size_t) channels;
+  if( obpc == 16 ) rawtile.data = new unsigned short[np];
+  else if( obpc == 8 ) rawtile.data = new unsigned char[np];
   else throw file_error( "Kakadu :: Unsupported number of bits" );
 
-  rawtile.dataLength = w*h*channels*(obpc/8);
+  rawtile.dataLength = np*(obpc/8);
   rawtile.filename = getImagePath();
   rawtile.timestamp = timestamp;
 

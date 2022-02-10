@@ -2,7 +2,7 @@
 
 /*  IIP Server: Tiled Pyramidal TIFF handler
 
-    Copyright (C) 2000-2020 Ruven Pillay.
+    Copyright (C) 2000-2021 Ruven Pillay.
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -63,7 +63,7 @@ void TPTImage::loadImageInfo( int seq, int ang )
 {
   tdir_t current_dir;
   int count;
-  uint16 colour, samplesperpixel, bitspersample, sampleformat;
+  uint16_t colour, samplesperpixel, bitspersample, sampleformat;
   double sminvaluearr[4] = {0.0}, smaxvaluearr[4] = {0.0};
   double *sminvalue = NULL, *smaxvalue = NULL;
   unsigned int w, h;
@@ -96,7 +96,10 @@ void TPTImage::loadImageInfo( int seq, int ang )
 
   // Check for the no. of resolutions in the pyramidal image
   current_dir = TIFFCurrentDirectory( tiff );
-  TIFFSetDirectory( tiff, 0 );
+
+  if( !TIFFSetDirectory( tiff, 0 ) ){
+    throw file_error( "TPTImage :: TIFFSetDirectory() failed" );
+  }
 
   // Store the list of image dimensions available
   image_widths.push_back( w );
@@ -108,9 +111,11 @@ void TPTImage::loadImageInfo( int seq, int ang )
     image_widths.push_back( w );
     image_heights.push_back( h );
   }
-  // Reset the TIFF directory
-  TIFFSetDirectory( tiff, current_dir );
 
+  // Reset the TIFF directory
+  if( !TIFFSetDirectory( tiff, current_dir ) ){
+    throw file_error( "TPTImage :: TIFFSetDirectory() failed" );
+  }
   numResolutions = count+1;
 
   // Handle various colour spaces
@@ -197,9 +202,9 @@ void TPTImage::closeImage()
 
 RawTile TPTImage::getTile( int seq, int ang, unsigned int res, int layers, unsigned int tile )
 {
-  uint32 im_width, im_height, tw, th, ntlx, ntly;
-  uint32 rem_x, rem_y;
-  uint16 colour;
+  uint32_t im_width, im_height, tw, th, ntlx, ntly;
+  uint32_t rem_x, rem_y;
+  uint16_t colour;
   string filename;
 
 

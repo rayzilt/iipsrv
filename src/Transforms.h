@@ -1,7 +1,7 @@
 /*
     Image Transforms
 
-    Copyright (C) 2004-2019 Ruven Pillay.
+    Copyright (C) 2004-2022 Ruven Pillay.
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -88,6 +88,11 @@ struct Transform {
   void LAB2sRGB( RawTile& in );
 
 
+  /// Fast efficient scaling from higher fixed point bit depths to 8 bit
+  /** @param in tile data to be converted */
+  void scale_to_8bit( RawTile& in );
+
+
   /// Function to apply a contrast adjustment and clip to 8 bit
   /** @param in tile data to be adjusted
       @param c contrast value
@@ -95,11 +100,17 @@ struct Transform {
   void contrast( RawTile& in, float c );
 
 
-  /// Apply a gamma correction
+  /// Apply a gamma correction (exponential transform)
   /** @param in tile input data
       @param g gamma
   */
   void gamma( RawTile& in, float g );
+
+
+  /// Apply log transform: out = c log( 1 + in )
+  /** @param in input image
+   */
+  void log( RawTile& in );
 
 
   /// Resize image using nearest neighbour interpolation

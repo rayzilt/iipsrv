@@ -1,3 +1,92 @@
+21/01/2022:
+	- Added fast scale_to_8bit() function to Transform class to allow 16 and 32 bit fixed point data to be efficiently
+	  scaled down to 8 bit without use of the floating point image processing pipeline
+
+
+19/01/2022:
+	- Added missing minmax variable to View class to indicate a user-defined min/max. Forces use of the floating point
+	  image processing pipeline in CVT.cc and JTL.cc
+
+
+16/01/2022:
+	- Modified TileManager.cc to verify that malloc() has correctly allocated memory.
+	- Updated numerical types to std::size_t in RawTile.h, TileManager.cc, KakaduImage.cc, OpenJPEG.cc and Transforms.cc
+	  when allocating memory via new to avoid integer overflow - fixes remaining problems identified in
+	  https://github.com/ruven/iipsrv/issues/223.
+
+
+15/01/2022:
+	- Added verification that image has been set in SPECTRA.cc and check on the validity of the requested tile
+	  resolution in JTL.cc. Fixes a couple of the crash conditions reported in https://github.com/ruven/iipsrv/issues/223
+
+
+14/01/2022:
+	- Detection of HTJ2K also added for KakaduImage.cc for logging purposes (DEBUG needs to be enabled at compile time)
+
+
+07/01/2022:
+	- Added detection of HTJ2K streams to OpenJPEG.cc for logging purposes (DEBUG needs to be enabled at compile time)
+
+
+14/09/2021:
+	- Fix to use C99 stdint types instead of deprecated libtiff types
+
+
+13/09/2021:
+	- Added extra error-checking to TIFFSetDirectory()
+
+
+03/09/2021:
+	- Handle the more stringent ICC profile checking introduced in libpng 1.6. Fix to prevent incorrect sRGB
+	  profiles failing with an error.
+
+
+06/07/2021:
+	- Added support for PNG output. Functionality available through the CVT command (CVT=png) as well as through IIIF API.
+	  PNG encoder supports alpha channels, 8 or 16 bit output, ICC profiles and XMP metadata.
+
+
+02/07/2021:
+	- Small modification to Compressor class and removal of duplicate quality parameter from JPEGCompressor class
+
+
+28/04/2021:
+	- Additional type casting added to IIIF.cc to avoid compiler warnings
+
+
+21/04/2021:
+	- Modified log transform function in Transform.cc to set appropriate input scaling for 8 bit output
+
+
+13/04/2021:
+	- Switched all FCGI printf statements to putStr or putS as all string data is always pre-formatted before
+	  being sent. This is not only more efficient, but also elinates the risk of uncontrolled format string injection.
+
+
+11/03/2021:
+	- Extra checks within bilinear interpolation code to avoid problems when used with address-sanitizer.
+	- Re-ordering to fix incoherent rendering of content-disposition in IIPResponse.cc.
+
+
+04/03/2021:
+	- Minor logging changes to TileManager class to allow improve logging with very detailed logging now moved into
+	  higher loglevel.
+
+
+01/03/2012:
+	- Modified JPEGCompressor::Finish() class to calculate data size before destroying compression structure.
+	  Avoids complaints when using address-sanitizer complilation flag.
+
+
+13/02/2021:
+	- Added logarithm transform processing to Transform.cc using the formula: out = c*log(1+in).
+	  Log transform can be requested by setting the gamma request to GAM=log or GAM=logarithm.
+
+
+03/02/2021:
+	- Added round() definition to JPEGCompressor.cc to allow MSVC compilation: https://github.com/ruven/iipsrv/issues/205
+
+
 27/06/2020:
 	- Trailing query suffixes using the ? character are now stripped off the IIIF quality/format string.
 	  Fixes: https://github.com/ruven/iipsrv/issues/145

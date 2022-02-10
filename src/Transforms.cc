@@ -2,7 +2,7 @@
 
 /*  IIPImage image processing routines
 
-    Copyright (C) 2004-2019 Ruven Pillay.
+    Copyright (C) 2004-2022 Ruven Pillay.
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -149,6 +149,7 @@ void Transform::normalize( RawTile& in, const vector<float>& max, const vector<f
   // Assign our new buffer and modify some info
   in.data = normdata;
   in.bpc = 32;
+  in.sampleType = FLOATINGPOINT;
   in.dataLength = np * (in.bpc/8);
 
 }
@@ -532,7 +533,7 @@ void Transform::interpolate_nearestneighbour( RawTile& in, unsigned int resample
   // Correctly set our Rawtile info
   in.width = resampled_width;
   in.height = resampled_height;
-  in.dataLength = resampled_width * resampled_height * channels * (in.bpc/8);
+  in.dataLength = (size_t)resampled_width * (size_t)resampled_height * (size_t)channels * (size_t)(in.bpc/8);
   in.data = output;
 }
 
@@ -548,10 +549,12 @@ void Transform::interpolate_bilinear( RawTile& in, unsigned int resampled_width,
   int channels = in.channels;
   unsigned int width = in.width;
   unsigned int height = in.height;
-  unsigned long np = in.channels * in.width * in.height;
+
+  // Define a max index position on the input buffer
+  unsigned long max = ( (width*height) - 1 ) * channels;
 
   // Create new buffer and pointer for our output - make sure we have enough digits via unsigned long long
-  unsigned char *output = new unsigned char[(unsigned long long)resampled_width*resampled_height*in.channels];
+  unsigned char *output = new unsigned char[(unsigned long long)resampled_width*resampled_height*channels];
 
   // Calculate our scale
   float xscale = (float)(width) / (float)resampled_width;
@@ -588,9 +591,10 @@ void Transform::interpolate_bilinear( RawTile& in, unsigned int resampled_width,
       p22 = (unsigned long) ( channels * ( (ii+1) + (jj_w+width) ) );
 
       // Make sure we don't stray outside our input buffer boundary
-      // - use replication at the edge
-      p12 = (p12<=np)? p12 : np-channels;
-      p22 = (p22<=np)? p22 : np-channels;
+      // - replicate at the edge
+      p12 = (p12<=max)? p12 : max;
+      p21 = (p21<=max)? p21 : max;
+      p22 = (p22<=max)? p22 : max;
 
       // Calculate the rest of our weights
       float iscale = i*xscale;
@@ -598,9 +602,9 @@ void Transform::interpolate_bilinear( RawTile& in, unsigned int resampled_width,
       float b = iscale - (float)ii;
 
       // Output buffer index
-      unsigned long long resampled_index = (unsigned long long)( (j*resampled_width + i) * in.channels );
+      unsigned long long resampled_index = (unsigned long long)( (j*resampled_width + i) * channels );
 
-      for( int k=0; k<in.channels; k++ ){
+      for( int k=0; k<channels; k++ ){
 	float tx = input[p11+k]*a + input[p21+k]*b;
 	float ty = input[p12+k]*a + input[p22+k]*b;
 	unsigned char r = (unsigned char)( c*tx + d*ty );
@@ -615,44 +619,90 @@ void Transform::interpolate_bilinear( RawTile& in, unsigned int resampled_width,
   // Correctly set our Rawtile info
   in.width = resampled_width;
   in.height = resampled_height;
-  in.dataLength = resampled_width * resampled_height * channels * (in.bpc/8);
+  in.dataLength = (size_t)resampled_width * (size_t)resampled_height * (size_t)channels * (size_t)(in.bpc/8);
   in.data = output;
 }
 
 
 
-// Function to apply a contrast adjustment and clip to 8 bit
+// Fast efficient scaling of higher fixed point bit depths to 8 bit
+void Transform::scale_to_8bit( RawTile& in ){
+
+  // Skip floating point data and data already in 8 bit form
+  if( in.bpc == 8 || in.sampleType == FLOATINGPOINT ) return;
+
+  size_t np = in.width * in.height * in.channels;
+  unsigned char* buffer = new unsigned char[np];
+
+  // 32 bit fixed point integer
+  if( in.bpc == 32 && in.sampleType == FIXEDPOINT ){
+#if defined(__ICC) || defined(__INTEL_COMPILER)
+#pragma ivdep
+#elif defined(_OPENMP)
+#pragma omp parallel for if( in.width*in.height > PARALLEL_THRESHOLD )
+#endif
+    for( size_t n=0; n<np; n++ ){
+      buffer[n] = (unsigned char)(((unsigned int*)in.data)[n] >> 16);
+    }
+    delete[] (unsigned int*) in.data;
+  }
+
+  // 16 bit unsigned short
+  else if( in.bpc == 16 ){
+#if defined(__ICC) || defined(__INTEL_COMPILER)
+#pragma ivdep
+#elif defined(_OPENMP)
+#pragma omp parallel for if( in.width*in.height > PARALLEL_THRESHOLD )
+#endif
+    for( size_t n=0; n<np; n++ ){
+      buffer[n] = (unsigned char)(((unsigned short*)in.data)[n] >> 8);
+    }
+    delete[] (unsigned short*) in.data;
+  }
+
+  // Replace original buffer with new 8 bit data
+  in.data = buffer;
+  in.bpc = 8;
+  in.sampleType = FIXEDPOINT;
+  in.dataLength = np;
+}
+
+
+
+// Function to apply a contrast adjustment and convert to 8 bit
 void Transform::contrast( RawTile& in, float c ){
 
-  unsigned long np = in.width * in.height * in.channels;
+  size_t np = in.width * in.height * in.channels;
   unsigned char* buffer = new unsigned char[np];
   float* infptr = (float*)in.data;
+  const float max = 255.0;    // Max pixel value for 8 bit data
 
 #if defined(__ICC) || defined(__INTEL_COMPILER)
 #pragma ivdep
 #elif defined(_OPENMP)
-#pragma omp parallel for
+#pragma omp parallel for if( in.width*in.height > PARALLEL_THRESHOLD )
 #endif
-  for( unsigned long n=0; n<np; n++ ){
-    float v = infptr[n] * 255.0 * c;
-    buffer[n] = (unsigned char)( (v<255.0) ? (v<0.0? 0.0 : v) : 255.0 );
+  for( size_t n=0; n<np; n++ ){
+    float v = infptr[n] * max * c;
+    buffer[n] = (unsigned char)( (v<max) ? (v<0.0? 0.0 : v) : max );
   }
 
   // Replace original buffer with new
   delete[] (float*) in.data;
   in.data = buffer;
   in.bpc = 8;
-  in.dataLength = np * (in.bpc/8);
+  in.sampleType = FIXEDPOINT;
+  in.dataLength = np;
 }
 
 
 
-// Gamma correction
+// Gamma correction (exponential transform): out = in * exp(g)
 void Transform::gamma( RawTile& in, float g ){
 
   if( g == 1.0 ) return;
 
-  unsigned int np = in.dataLength * 8 / in.bpc;
+  unsigned int np = in.width * in.height * in.channels;
   float* infptr = (float*)in.data;
 
   // Loop through our pixels for floating values
@@ -664,6 +714,31 @@ void Transform::gamma( RawTile& in, float g ){
   for( unsigned int n=0; n<np; n++ ){
     float v = infptr[n];
     infptr[n] = powf( v<0.0 ? 0.0 : v, g );
+  }
+}
+
+
+
+// Apply log transform: out = c log( 1 + in )
+void Transform::log( RawTile& in ){
+
+  // Need to handle input scale appropriately - log between 0-1 more linear than 0-255
+  // - assume only 8 bit output for now
+  float max = 255.0;
+
+  // Scale factor
+  float scale = 1.0 / logf( max + 1.0 );
+
+  unsigned int np = in.width * in.height * in.channels;
+
+#if defined(__ICC) || defined(__INTEL_COMPILER)
+#pragma ivdep
+#elif defined(_OPENMP)
+#pragma omp parallel for if( in.width*in.height > PARALLEL_THRESHOLD )
+#endif
+  for( unsigned int i=0; i<np; i++ ){
+    float v = ((float*)in.data)[i] * max;
+    ((float*)in.data)[i] = scale * logf( 1.0 + v );
   }
 }
 
